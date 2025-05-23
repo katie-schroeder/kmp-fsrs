@@ -1,7 +1,15 @@
 package chat.sdk.android_fsrs
 
-import java.util.Date
-import java.util.concurrent.TimeUnit
+
+import kotlinx.datetime.DateTimeUnit
+import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.Clock
+import kotlinx.datetime.DateTimePeriod
+import kotlinx.datetime.plus
+import kotlinx.datetime.toInstant
+import kotlinx.datetime.toLocalDateTime
+import kotlinx.datetime.until
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
@@ -12,7 +20,7 @@ public enum class Status(val value: String) {
     New("New"), Learning("Learning"), Review("Review"), Relearning("Relearning");
     companion object {
         fun from(value: String): Status {
-            return Status.values().find { it.value == value } ?: Status.New
+            return Status.entries.find { it.value == value } ?: Status.New
         }
     }
 }
@@ -29,7 +37,7 @@ class ReviewLog(
     var rating: Rating,
     var elapsedDays: Double,
     var scheduledDays: Double,
-    var review: Date,
+    var review: LocalDateTime,
     var status: Status
 ) {
     fun data(): Map<String, Any> {
@@ -43,9 +51,9 @@ class ReviewLog(
     }
 }
 
-class FSRSCard : Cloneable {
+class FSRSCard {
 
-    var due: Date = Date()
+    var due: LocalDateTime = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
     var stability: Double = 0.0
     var difficulty: Double = 0.0
     var elapsedDays: Double = 0.0
@@ -53,11 +61,9 @@ class FSRSCard : Cloneable {
     var reps: Int = 0
     var lapses: Int = 0
     var status: Status = Status.New
-    var lastReview: Date = Date()
+    var lastReview: LocalDateTime = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
 
-    constructor()
-
-//    fun retrievability(now: Date): Double? {
+    //    fun retrievability(now: Date): Double? {
 //        var retrievability: Double? = null
 //        if (status == Status.Review) {
 //            val elapsedDays = max(0.0, (now.time - lastReview.time) / (Const.secondsInDay))
@@ -66,7 +72,7 @@ class FSRSCard : Cloneable {
 //        return retrievability
 //    }
 
-    public override fun clone(): FSRSCard {
+    public fun clone(): FSRSCard {
         val card = FSRSCard()
         card.due = due
         card.stability = stability
@@ -113,7 +119,7 @@ class SchedulingInfo {
         this.reviewLog = reviewLog
     }
 
-    constructor(rating: Rating, reference: FSRSCard, current: FSRSCard, review: Date) {
+    constructor(rating: Rating, reference: FSRSCard, current: FSRSCard, review: LocalDateTime) {
         this.card = reference
         this.reviewLog = ReviewLog(rating, reference.scheduledDays, current.elapsedDays, review, current.status)
     }
@@ -125,14 +131,14 @@ class SchedulingInfo {
     }
 }
 
-class SchedulingCards {
+class SchedulingCards(card: FSRSCard) {
 
     var again: FSRSCard
     var hard: FSRSCard
     var good: FSRSCard
     var easy: FSRSCard
 
-    constructor(card: FSRSCard) {
+    init {
         this.again = card.clone()
         this.hard = card.clone()
         this.good = card.clone()
@@ -154,26 +160,34 @@ class SchedulingCards {
         }
     }
 
-    fun schedule(now: Date, hardInterval: Double, goodInterval: Double, easyInterval: Double) {
+    fun schedule(now: LocalDateTime, hardInterval: Double, goodInterval: Double, easyInterval: Double) {
         again.scheduledDays = 0.0
         hard.scheduledDays = hardInterval
         good.scheduledDays = goodInterval
         easy.scheduledDays = easyInterval
-        again.due = addTime(now, 5, TimeUnit.MINUTES)
+        again.due = addTime(now, 5, DateTimeUnit.MINUTE)
         if (hardInterval > 0) {
-            hard.due = addTime(now, hardInterval.toLong(), TimeUnit.DAYS)
+            hard.due = addTime(now, hardInterval.toLong(), DateTimeUnit.DAY)
         } else {
-            hard.due = addTime(now, 10, TimeUnit.MINUTES)
+            hard.due = addTime(now, 10, DateTimeUnit.MINUTE)
         }
-        good.due = addTime(now, goodInterval.toLong(), TimeUnit.DAYS)
-        easy.due = addTime(now, easyInterval.toLong(), TimeUnit.DAYS)
+        good.due = addTime(now, goodInterval.toLong(), DateTimeUnit.DAY)
+        easy.due = addTime(now, easyInterval.toLong(), DateTimeUnit.DAY)
     }
 
-    fun addTime(now: Date, value: Long, unit: TimeUnit): Date {
-        return Date(now.time + unit.toMillis(value))
+    fun addTime(now: LocalDateTime, value: Long, unit: DateTimeUnit): LocalDateTime {
+        var endTime = now.toInstant(TimeZone.currentSystemDefault())
+        if (unit == DateTimeUnit.DAY) {
+            endTime = endTime.plus(DateTimePeriod(days = value.toInt()), TimeZone.currentSystemDefault())
+        } else if (unit == DateTimeUnit.MINUTE) {
+            endTime = endTime.plus(DateTimePeriod(minutes = value.toInt()), TimeZone.currentSystemDefault())
+        } else {
+            throw Exception("Error: This function only supports days and minutes.")
+        }
+        return endTime.toLocalDateTime(TimeZone.currentSystemDefault())
     }
 
-    fun recordLog(card: FSRSCard, now: Date): Map<Rating, SchedulingInfo> {
+    fun recordLog(card: FSRSCard, now: LocalDateTime): Map<Rating, SchedulingInfo> {
         return mapOf(
             Rating.Again to SchedulingInfo(Rating.Again, again, card, now),
             Rating.Hard to SchedulingInfo(Rating.Hard, hard, card, now),
@@ -192,12 +206,16 @@ class SchedulingCards {
     }
 }
 
-class Params {
+class Params// Initial Stability for Again
+// Initial Stability for Hard
+// Initial Stability for Good
+// Initial Stability for Easy
+    () {
     var requestRetention: Double
     var maximumInterval: Double
     var w: List<Double>
 
-    constructor() {
+    init {
         this.requestRetention = 0.9
         this.maximumInterval = 36500.0
         this.w = listOf(
@@ -222,21 +240,23 @@ class Params {
     }
 }
 
-class FSRS {
+class FSRS() {
     var p: Params
 
-    constructor() {
+    init {
         this.p = Params()
     }
 
     // Was repeat
-    fun `repeat`(card: FSRSCard, now: Date): Map<Rating, SchedulingInfo> {
+    fun repeat(card: FSRSCard, now: LocalDateTime): Map<Rating, SchedulingInfo> {
         val card = card.clone() as FSRSCard
 
         if (card.status == Status.New) {
             card.elapsedDays = 0.0
         } else {
-            card.elapsedDays = max(0.0, TimeUnit.MILLISECONDS.toDays(now.time - card.lastReview.time).toDouble())
+            card.elapsedDays = max(0.0,
+                (card.lastReview.toInstant(TimeZone.currentSystemDefault()).until(Clock.System.now(), DateTimeUnit.DAY, TimeZone.currentSystemDefault()).toDouble())
+            )
         }
 
         println("Elapsed ${card.elapsedDays}")
@@ -248,12 +268,12 @@ class FSRS {
 
         if (card.status == Status.New) {
             initDS(s)
-            s.again.due = s.addTime(now, 1, TimeUnit.MINUTES)
-            s.hard.due = s.addTime(now, 5, TimeUnit.MINUTES)
-            s.good.due = s.addTime(now, 10, TimeUnit.MINUTES)
+            s.again.due = s.addTime(now, 1, DateTimeUnit.MINUTE)
+            s.hard.due = s.addTime(now, 5, DateTimeUnit.MINUTE)
+            s.good.due = s.addTime(now, 10, DateTimeUnit.MINUTE)
             val easyInterval = nextInterval(s.easy.stability)
             s.easy.scheduledDays = easyInterval
-            s.easy.due = s.addTime(now, easyInterval.toLong(), TimeUnit.DAYS)
+            s.easy.due = s.addTime(now, easyInterval.toLong(), DateTimeUnit.DAY)
         } else if (card.status == Status.Learning || card.status == Status.Relearning) {
             val hardInterval = 0.0
             val goodInterval = nextInterval(s.good.stability)
